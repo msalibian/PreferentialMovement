@@ -1,5 +1,5 @@
 ---
-title: "Preferential Sampling with moving monitors"
+title: "Preferential Sampling with moving monitoring stations"
 output: github_document
 ---
 
