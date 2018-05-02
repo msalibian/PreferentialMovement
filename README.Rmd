@@ -22,10 +22,11 @@ The `R` code used below can be found in a single file here: [runfile.R](runfile.
 The example below follows that in Section 4 of the paper and uses the Preferential-CRW model to simulate preferentially sampled animal tracks and corresponding sea surface temperature observations. We then compare parameter estimation and prediction using standard methods and the preferential model in TMB.
 
 ## Warning
-Note that running this code requires a machine with at least 16GB RAM to avoid locking up the PC.
+Note that running this code (in particular the compilation of the C++ file) 
+requires a large amount of RAM (we recommend 16GB). 
 
 ## Simulation Example
-To begin we source the file [dataFncs.R](dataFncs.R) which contains the necessary functions to generate the data (not to fit any models). Then we compile the file [TMBfile.cpp](TMBfile.cpp) to use in TMB. This file contains the negative joint log-likelihood function $-\log([X,Y,S])$. Note that you must have installed the [TMB](https://cran.r-project.org/package=TMB) `R` package from CRAN.
+First we source the file [dataFncs.R](dataFncs.R) which contains the necessary functions to generate the data (not to fit any models). Then we compile the file [TMBfile.cpp](TMBfile.cpp) to use in TMB. This file contains the negative joint log-likelihood function $-\log([X,Y,S])$. Note that you must have installed the [TMB](https://cran.r-project.org/package=TMB) `R` package from CRAN.
 
 ```{r source, message=FALSE, warning=FALSE}
 source('dataFncs.R')
