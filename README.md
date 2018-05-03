@@ -18,22 +18,15 @@ Note that running this code (in particular the compilation of the C++ file) requ
 Simulation Example
 ------------------
 
-First we source the file [dataFncs.R](dataFncs.R) which contains the necessary functions to generate the data (not to fit any models). Then we compile the file [TMBfile.cpp](TMBfile.cpp) to use in TMB. This file contains the negative joint log-likelihood function −log(\[*X*, *Y*, *S*\]). Note that you must have installed the [TMB](https://cran.r-project.org/package=TMB) `R` package from CRAN.
+First we source the file [dataFncs.R](dataFncs.R) which contains the necessary functions to generate the data.
 
 ``` r
 source('dataFncs.R')
-compile("TMBfile.cpp")
 ```
 
-    ## [1] 0
+Now to specify the parameters to generate the data set. These can be altered to vary the properties of the latent field to be sampled and also to change the movement patterns of the sampler. Refer to the paper for more details on the model.
 
-``` r
-dyn.load(dynlib("TMBfile"))
-```
-
-Now to specify the parameters to generate the data set. These can be altered to vary the properties of the latent field to be sampled and also to change the movement patterns of the sampler.
-
-First specify the field parameters sasuming a matern covariance structure:
+First we specify the field parameters sasuming a matern covariance structure:
 
 ``` r
 # constant mean
@@ -52,7 +45,7 @@ model <- RMwhittle(nu=kappa, var=GPVar, scale=phi)
 trend <- 0
 ```
 
-Now to specify movement/sampler properties:
+Next we specify the parameters that determine the movement/sampler properties:
 
 ``` r
 # is starting location random? (0 = yes and >0 multivariate normal with
@@ -61,11 +54,11 @@ start <- 0
 # alpha[1] defines starting value of beta_1 from eq (3.5)
 # alpha[2:3] are currently both equal to \alpha from eq (3.2). They could be changed to
 # adopt preferential movement varying in strength across latitude/longitude.
-alpha <- c(.5, 150,150) 
+alpha <- c(.5, 150, 150) 
 # the number of tracks in the simulation
-numTracks <- 3
+numTracks <- 4
 # the number of data points to simulate per track
-n <- 120
+n <- 80
 # the number of observations to throw out per track (ie/ total sample
 # size per track is n-burnIn)
 burnIn <- 20
@@ -80,7 +73,7 @@ moveSD <- 12
 dataParam <- c(behavSD, moveSD)
 ```
 
-Next we create a lattice for data simulation and also for model fitting/predictions. These can be the same if `nrowcol` = `l` but we can choose different grids for computational efficiency.
+We now create a lattice for data simulation and also for model fitting/predictions. These can be the same if `nrowcol` = `l` but we can choose different grid sizes for computational efficiency.
 
 ``` r
 # define the domain to simulate data
@@ -102,10 +95,24 @@ lattice <- expand.grid(xseq,yseq)
 colnames(lattice) <- c("Y1New", "Y2New")
 ```
 
+<!-- ```{r initiate, include=FALSE} -->
+<!-- # initiate objects -->
+<!-- # nonPrefParams <- NULL -->
+<!-- # prefParams <- NULL -->
+<!-- # postBias <- NULL -->
+<!-- # krigBias <- NULL -->
+<!-- # nonPrefBias <- NULL -->
+<!-- # postIGN <-  NULL -->
+<!-- # krigIGN <- NULL -->
+<!-- # nonPrefIGN <- NULL -->
+<!-- # nonPrefParams <- array(NA, dim=c(1, 4)) -->
+<!-- # prefParams <- array(NA, dim=c(1, 8)) -->
+<!-- ``` -->
 Now we can generate the data. We first simulate the latent field and then run the sampler using `genPrefDataHybridBehav` which can be found in `dataFncs.R`. From here we will extract the data and the so-called true surface on the lattice and observed locations
 
 ``` r
 # simulate the random field
+set.seed(1)
 rawDat <- RFsimulate(model, x=as.matrix(gridFull),  exactness=TRUE)
 # simulate the observations and sampling locations
 Xsim <- genPrefDataHybridBehav(n=n, movementParam=dataParam, nrowcol=nrowcol, m=0, 
@@ -131,6 +138,13 @@ head(data)
 Here is how the data looks. Each colour is a different track and dots are sampling locations which are superimposed onto the unknown latent field.
 
 ![](README_files/figure-markdown_github/plotdata-1.png)
+
+Now we compile the file [TMBfile.cpp](TMBfile.cpp) to use in TMB. This file contains the negative joint log-likelihood function −log(\[*X*, *Y*, *S*\]). Note that you must have installed the [TMB](https://cran.r-project.org/package=TMB) `R` package from CRAN.
+
+``` r
+compile("TMBfile.cpp")
+dyn.load(dynlib("TMBfile"))
+```
 
 Next is some house keeping to prepare the data for TMB
 
@@ -163,8 +177,8 @@ Next we create a mesh using `inla.mesh.create` for the SPDE approach of `R-INLA`
 
 ``` r
 # create INLA mesh
-mesh <- inla.mesh.create(loc = predGrid, extend = T, refine = T) 
-# now create an index that matches sampling locations with mesh locations 
+mesh <- inla.mesh.create(loc = predGrid, extend = T, refine = T)
+# now create an index that matches sampling locations with mesh locations
 ii0 <- mesh$idx$loc
 # Create data for TMB
 dataTMB <- list(tsim=tsim,Y1=Y1New, Y2=Y2New, Y=Yobs, trackId=trackId,  meshidxloc=mesh$idx$loc-1)
@@ -217,10 +231,10 @@ standardMLE <- likfit(geodata, coords = geodata$coords, data = geodata$data, kap
 
     ## likfit: estimated model parameters:
     ##      beta     tausq   sigmasq       phi 
-    ## " 4.0803" " 0.0869" " 2.7626" "15.4521" 
-    ## Practical Range with cor=0.05 for asymptotic range: 82.95258
+    ## " 4.8765" " 0.0866" " 2.5514" "12.6037" 
+    ## Practical Range with cor=0.05 for asymptotic range: 67.66141
     ## 
-    ## likfit: maximised log-likelihood = -182
+    ## likfit: maximised log-likelihood = -155.4
 
 Next we will fit the model in `TMB`. First we define the parameters for the model (including latent states). Our latent states are the field *S* and behavioural states *b**e**t**a*'s. We start the other parameters
 
@@ -253,7 +267,7 @@ opt$convergence
     ## [1] 0
 
 ``` r
-# Obtain the standard errors    
+# Obtain the standard errors
 sdre <- try( sdreport(obj) )
 if( class(sdre) != 'try-error') {
   # input params
@@ -261,14 +275,14 @@ if( class(sdre) != 'try-error') {
 }
 ```
 
-    ##                Estimate  Std. Error
-    ## mu             4.402713  0.56326479
-    ## log_papertau   3.347267  0.14287058
-    ## log_kappa     -2.755267  0.12632146
-    ## log_tau       -1.235530  0.04884612
-    ## alpha        144.029794 17.45628969
-    ## log_d          2.531945  0.03089099
-    ## log_sdbehav   -1.897622  0.30079276
+    ##               Estimate  Std. Error
+    ## mu            5.064511  0.50094354
+    ## log_papertau  3.037084  0.15505027
+    ## log_kappa    -2.558404  0.12705914
+    ## log_tau      -1.221102  0.06041476
+    ## alpha        85.027308 13.62016512
+    ## log_d         2.426771  0.03636466
+    ## log_sdbehav  -2.383363  0.39969434
 
 ``` r
 # prediction variance from TMB
@@ -325,12 +339,12 @@ IgnScoreNonPref <- IGN(nonPredPref$predict, rawDatSmall, nonPredPref$krige.var)
 mean(IgnScorePost)
 ```
 
-    ## [1] 1.15876
+    ## [1] 1.054781
 
 ``` r
 mean(IgnScoreNonPref)
 ```
 
-    ## [1] 1.475744
+    ## [1] 1.084511
 
 Finally we can plot the IGN scores and compare predictive surfaces from the non-preferential and preferential models. We consider only prediction locations in regions near the sampling locations: ![](README_files/figure-markdown_github/showign-1.png)![](README_files/figure-markdown_github/showign-2.png)![](README_files/figure-markdown_github/showign-3.png) Note that the mean IGN for the following two plots are 0.41 (TMB) and 0.64 (kriging) respectively. ![](README_files/figure-markdown_github/plotign2-1.png)![](README_files/figure-markdown_github/plotign2-2.png)
