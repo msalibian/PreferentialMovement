@@ -13,7 +13,7 @@ The example below follows that in Section 4 of the paper and uses the Preferenti
 Warning
 -------
 
-Note that running this code (in particular the compilation of the C++ file) requires a large amount of RAM (we recommend 16GB).
+Note that running this code may require a large amount of RAM (we recommend 16GB).
 
 Simulation Example
 ------------------
@@ -231,10 +231,10 @@ standardMLE <- likfit(geodata, coords = geodata$coords, data = geodata$data, kap
 
     ## likfit: estimated model parameters:
     ##      beta     tausq   sigmasq       phi 
-    ## " 4.8765" " 0.0866" " 2.5514" "12.6037" 
-    ## Practical Range with cor=0.05 for asymptotic range: 67.66141
+    ## " 4.4319" " 0.0739" " 2.7101" "15.8464" 
+    ## Practical Range with cor=0.05 for asymptotic range: 85.06966
     ## 
-    ## likfit: maximised log-likelihood = -155.4
+    ## likfit: maximised log-likelihood = -122.8
 
 Next we will fit the model in `TMB`. First we define the parameters for the model (including latent states). Our latent states are the field *S* and behavioural states *b**e**t**a*'s. We start the other parameters
 
@@ -275,14 +275,14 @@ if( class(sdre) != 'try-error') {
 }
 ```
 
-    ##               Estimate  Std. Error
-    ## mu            5.064511  0.50094354
-    ## log_papertau  3.037084  0.15505027
-    ## log_kappa    -2.558404  0.12705914
-    ## log_tau      -1.221102  0.06041476
-    ## alpha        85.027308 13.62016512
-    ## log_d         2.426771  0.03636466
-    ## log_sdbehav  -2.383363  0.39969434
+    ##                Estimate  Std. Error
+    ## mu             4.939458  0.70357739
+    ## log_papertau   3.539569  0.16696319
+    ## log_kappa     -2.869189  0.14946801
+    ## log_tau       -1.285581  0.05806115
+    ## alpha        174.620945 23.13155555
+    ## log_d          2.574603  0.03588378
+    ## log_sdbehav   -1.870642  0.31034349
 
 ``` r
 # prediction variance from TMB
@@ -339,12 +339,12 @@ IgnScoreNonPref <- IGN(nonPredPref$predict, rawDatSmall, nonPredPref$krige.var)
 mean(IgnScorePost)
 ```
 
-    ## [1] 1.054781
+    ## [1] 1.170347
 
 ``` r
 mean(IgnScoreNonPref)
 ```
 
-    ## [1] 1.084511
+    ## [1] 1.299883
 
 Finally we can plot the IGN scores and compare predictive surfaces from the non-preferential and preferential models. We consider only prediction locations in regions near the sampling locations: ![](README_files/figure-markdown_github/showign-1.png)![](README_files/figure-markdown_github/showign-2.png)![](README_files/figure-markdown_github/showign-3.png) Note that the mean IGN for the following two plots are 0.41 (TMB) and 0.64 (kriging) respectively. ![](README_files/figure-markdown_github/plotign2-1.png)![](README_files/figure-markdown_github/plotign2-2.png)
