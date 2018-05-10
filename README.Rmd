@@ -19,10 +19,10 @@ on marine mammals which may have been preferentially obtained. The `R` code used
 
 The example below follows that in Section 4 of the paper and uses the Preferential-CRW model to simulate preferentially sampled animal tracks and corresponding sea surface temperature observations. We then compare parameter estimation and prediction using standard methods and the preferential model in TMB.
 
-## Warning
+### Warning
 Note that running this code may require a large amount of RAM (we recommend 16GB). 
 
-## Simulation Example
+## Generating a data set
 First we source the file [dataFncs.R](dataFncs.R) which contains the necessary functions to generate the data. 
 ```{r source, message=FALSE, warning=FALSE}
 source('dataFncs.R')

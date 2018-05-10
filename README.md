@@ -10,13 +10,12 @@ Below we illustrate how to model data obtained from sensor tags mounted on marin
 
 The example below follows that in Section 4 of the paper and uses the Preferential-CRW model to simulate preferentially sampled animal tracks and corresponding sea surface temperature observations. We then compare parameter estimation and prediction using standard methods and the preferential model in TMB.
 
-Warning
--------
+### Warning
 
 Note that running this code may require a large amount of RAM (we recommend 16GB).
 
-Simulation Example
-------------------
+Generating a data set
+---------------------
 
 First we source the file [dataFncs.R](dataFncs.R) which contains the necessary functions to generate the data.
 
@@ -24,7 +23,7 @@ First we source the file [dataFncs.R](dataFncs.R) which contains the necessary f
 source('dataFncs.R')
 ```
 
-Now to specify the parameters to generate the data set. These can be altered to vary the properties of the latent field to be sampled and also to change the movement patterns of the sampler. Refer to the paper for more details on the model.
+Now we specify the parameters to generate the data set. These can be altered to vary the properties of the latent field to be sampled and also to change the movement patterns of the sampler. Refer to the paper for more details on the model.
 
 First we specify the field parameters sasuming a matern covariance structure:
 
