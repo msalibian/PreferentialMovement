@@ -25,7 +25,7 @@ source('dataFncs.R')
 
 Now we specify the parameters to generate the data set. These can be altered to vary the properties of the latent field to be sampled and also to change the movement patterns of the sampler. Refer to the paper for more details on the model.
 
-First we specify the field parameters sasuming a matern covariance structure:
+First we set the parameters of the assumed Matern covariance function and the (constant) mean of the underlying random field:
 
 ``` r
 # constant mean
@@ -44,7 +44,7 @@ model <- RMwhittle(nu=kappa, var=GPVar, scale=phi)
 trend <- 0
 ```
 
-Next we specify the parameters that determine the movement/sampler properties:
+Next we specify the parameters that determine the movement/sampler properties. Please refer to the paper for more details on the model and its parameters.
 
 ``` r
 # is starting location random? (0 = yes and >0 multivariate normal with
@@ -72,7 +72,7 @@ moveSD <- 12
 dataParam <- c(behavSD, moveSD)
 ```
 
-We now create a lattice for data simulation and also for model fitting/predictions. These can be the same if `nrowcol` = `l` but we can choose different grid sizes for computational efficiency.
+We now create a spatial grid (lattice) for data simulation and also for model fitting/predictions. These can be the same if `nrowcol = l` (the latter is a lowercase letter `L`) but we can choose different grid sizes for computational efficiency.
 
 ``` r
 # define the domain to simulate data
@@ -107,7 +107,7 @@ colnames(lattice) <- c("Y1New", "Y2New")
 <!-- # nonPrefParams <- array(NA, dim=c(1, 4)) -->
 <!-- # prefParams <- array(NA, dim=c(1, 8)) -->
 <!-- ``` -->
-Now we can generate the data. We first simulate the latent field and then run the sampler using `genPrefDataHybridBehav` which can be found in `dataFncs.R`. From here we will extract the data and the so-called true surface on the lattice and observed locations
+Now we are ready to generate the data. We first simulate the latent field and then run the sampler using `genPrefDataHybridBehav` which can be found in `dataFncs.R`. From here we will extract the data and the so-called true surface on the lattice and observed locations
 
 ``` r
 # simulate the random field
