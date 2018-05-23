@@ -6,11 +6,11 @@ This repository is a companion resource to the paper "Modelling ocean temperatur
 Introduction
 ------------
 
-Below we illustrate how to model data obtained from sensor tags mounted on marine mammals which may have been preferentially obtained. The `R` code used below can be found in a single file here: [runfile.R](runfile.R). The required functions are in the file [dataFncs.R](dataFncs.R), and the negative log-likelihood function required by [TMB](https://cran.r-project.org/package=TMB) is in the file [TMBfile.cpp](TMBfile.cpp).
+Below we illustrate how to model data obtained from sensor tags mounted on marine mammals which may have been preferentially sampled. The `R` code used below in this document can also be found in a single file here: [runfile.R](runfile.R). The required functions are in the file [dataFncs.R](dataFncs.R), and the negative log-likelihood function required by [TMB](https://cran.r-project.org/package=TMB) is in the file [TMBfile.cpp](TMBfile.cpp).
 
-The example below follows that in Section 4 of the paper and uses the Preferential-CRW model to simulate preferentially sampled animal tracks and corresponding sea surface temperature observations. We then compare parameter estimation and prediction using standard methods and the preferential model in TMB.
+The example below follows the simulation settings discussed in Section 4 of the paper and uses the Preferential-CRW model to generate preferentially sampled animal tracks and their corresponding temperature observations. We then compare parameter estimation and prediction using standard methods and the preferential model in TMB.
 
-### Warning
+##### Warning
 
 Note that running this code may require a large amount of RAM (we recommend 16GB).
 
@@ -107,7 +107,7 @@ colnames(lattice) <- c("Y1New", "Y2New")
 <!-- # nonPrefParams <- array(NA, dim=c(1, 4)) -->
 <!-- # prefParams <- array(NA, dim=c(1, 8)) -->
 <!-- ``` -->
-Now we are ready to generate the data. We first simulate the latent field and then run the sampler using `genPrefDataHybridBehav` which can be found in `dataFncs.R`. From here we will extract the data and the so-called true surface on the lattice and observed locations
+Now we are ready to generate the data. We first simulate the latent field and then run the sampler using the function `genPrefDataHybridBehav` which can be found in `dataFncs.R`. From here we will extract the data and the so-called true surface on the lattice and observed locations.
 
 ``` r
 # simulate the random field
@@ -145,7 +145,7 @@ compile("TMBfile.cpp")
 dyn.load(dynlib("TMBfile"))
 ```
 
-Next is some house keeping to prepare the data for TMB
+Next is some house keeping to prepare the data for TMB (refer to the comments inside the script below for details):
 
 ``` r
 # obtain sampling times
@@ -172,7 +172,7 @@ for(i in 1:length(data[,1])){
 predGrid <-  rbind(cbind(Y1New, Y2New), lattice)
 ```
 
-Next we create a mesh using `inla.mesh.create` for the SPDE approach of `R-INLA`. We mush be careful to specify an index that matches sampling locations with mesh locations, but also change indexing for use in `C++`.
+Next we create a mesh using `inla.mesh.create` to use the SPDE approach of `R-INLA`. We mush be careful to specify an index that matches sampling locations with mesh locations, but also change indexing for use in the `C++` code.
 
 ``` r
 # create INLA mesh
@@ -183,7 +183,7 @@ ii0 <- mesh$idx$loc
 dataTMB <- list(tsim=tsim,Y1=Y1New, Y2=Y2New, Y=Yobs, trackId=trackId,  meshidxloc=mesh$idx$loc-1)
 ```
 
-Now we will create our sparse precision matrix for smoothness (*κ*) 2, which enables the field to be differentiable in the mean square sense. For details on this part see Appendix A.
+Now we will create our sparse precision matrix for smoothness (*κ*) 2, which enables the field to be differentiable (in mean square sense). For details on this part see Appendix A.
 
 ``` r
 # using SPDE method from R-INLA with alpha=2 (kappa=1)
@@ -207,7 +207,7 @@ geodata <- as.geodata(obj1, coords.col = 1:2, data.col = 3)
 Parameter Estimation
 --------------------
 
-Time to fit some models! First let us fit a standard model using `likfit` from the `geoR` package. This ignores any preferential effect and conditions on the sampling locations *X*.
+Time to fit some models! First let us fit a standard model using `likfit` from the pacakge `geoR`. This approach ignores any preferential effect and works conditional on the observed sampling locations **X**.
 
 ``` r
 standardMLE <- likfit(geodata, coords = geodata$coords, data = geodata$data, kappa=kappa, ini=c(.5,.5))
@@ -235,7 +235,7 @@ standardMLE <- likfit(geodata, coords = geodata$coords, data = geodata$data, kap
     ## 
     ## likfit: maximised log-likelihood = -122.8
 
-Next we will fit the model in `TMB`. First we define the parameters for the model (including latent states). Our latent states are the field *S* and behavioural states *b**e**t**a*'s. We start the other parameters
+Next we will fit the model in `TMB`. First we define the parameters for the model (including latent states). Our latent states are the field **S** and behavioural states **beta**. The call to `MakeADFun` creates the likelihood function, which is then optimized numerically using `nlminb` (but other general-purpose optimization functions, e.g. `optim`, can also be considered).
 
 ``` r
 parameters <- list(
@@ -257,6 +257,8 @@ opt <- try( nlminb(obj$par,obj$fn,obj$gr, control=list(rel.tol=1e-7)) )
 # Extract sigma^2 (partial sill)
 report_spde <- obj$report()
 ```
+
+It is always good practice to verify that the optimization iterations have converged:
 
 ``` r
 # check convergence
@@ -283,15 +285,10 @@ if( class(sdre) != 'try-error') {
     ## log_d          2.574603  0.03588378
     ## log_sdbehav   -1.870642  0.31034349
 
-``` r
-# prediction variance from TMB
-predVar <- (summary(sdre, "random")[(length(Y1New)+1):(length(Y1New)+nrow(lattice)),2])^2
-```
-
 Prediction
 ----------
 
-Now we have obtained parameter estimates for the standard method and for the preferential model using `TMB`. To predict using the non-preferential model we will use kriging with plug-in parameters obtained from the standard `likfit` function. For the preferential model we use the mode of the \[*S*|*Y*, *X*\] at the optimal parameters. This is provided by *T**M**B* as part of the Laplace approximation procedure and is defined in eq (2.7).
+We have obtained parameter estimates for the standard method and for the preferential model using `TMB`. To predict using the non-preferential model we will use kriging with plug-in parameters obtained from the standard `likfit` function. For the preferential model we use the mode of the **\[S|Y,X\]** at the optimal parameters. This is provided by `TMB` as part of the Laplace approximation procedure and is defined in eq (2.7) of the paper.
 
 ``` r
 # conduct simple kriging using standard MLE plug-in parameters
@@ -311,6 +308,8 @@ modePred <- obj$env$last.par.best[(length(Y1New)+1):(length(Y1New)+nrow(lattice)
 nonPrefPred <- nonPredPref$predict
 # non-pref prediction variance
 nonPrefVar <- nonPredPref$krige.var
+# prediction variance from TMB
+predVar <- (summary(sdre, "random")[(length(Y1New)+1):(length(Y1New)+nrow(lattice)),2])^2
 ```
 
 Next we want to be able to compare these predictions to the real values of the field at the prediction points.
@@ -322,7 +321,7 @@ matchedIndic <- row.match(lattice,gridFull)
 rawDatSmall <- rawDat$variable1[matchedIndic] + mean
 ```
 
-Now let us calculate the mean ignorance score for each method on this data set (MIGN from eq (4.2)). Recall that the ignorance function (IGN) is given by
+Now let us calculate the mean ignorance score for each method on this data set (MIGN from eq (4.2) in the paper). Recall that the ignorance function (IGN) is given by
 
 ``` r
 IGN <- function(pred, act, var) {
@@ -346,4 +345,6 @@ mean(IgnScoreNonPref)
 
     ## [1] 1.299883
 
-Finally we can plot the IGN scores and compare predictive surfaces from the non-preferential and preferential models. We consider only prediction locations in regions near the sampling locations: ![](README_files/figure-markdown_github/showign-1.png)![](README_files/figure-markdown_github/showign-2.png)![](README_files/figure-markdown_github/showign-3.png) Note that the mean IGN for the following two plots are 0.41 (TMB) and 0.64 (kriging) respectively. ![](README_files/figure-markdown_github/plotign2-1.png)![](README_files/figure-markdown_github/plotign2-2.png)
+Finally we can plot the IGN scores and compare predictive surfaces from the non-preferential and preferential models. We consider only prediction locations in regions near the sampling locations: ![](README_files/figure-markdown_github/showign-1.png)![](README_files/figure-markdown_github/showign-2.png)![](README_files/figure-markdown_github/showign-3.png)
+
+Note that the mean IGN for the following two plots are 0.41 (TMB) and 0.64 (kriging) respectively. ![](README_files/figure-markdown_github/plotign2-1.png)![](README_files/figure-markdown_github/plotign2-2.png)
