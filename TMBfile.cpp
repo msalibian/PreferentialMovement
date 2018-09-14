@@ -22,7 +22,20 @@ Eigen::SparseMatrix <Type> Q_spde_smooth2(spde_t_smooth2<Type> spde, Type kappa)
   Type kappa_pow6 = kappa_pow4*kappa_pow2;
   return kappa_pow6*spde.M0 + Type(3.0)*kappa_pow4*spde.M1 + Type(3.0)*kappa_pow2*spde.M2 + spde.M3;
 }
-// define negative joint log-liklihood ([X,Y,S,beta]=[Y|S,X,beta][X|S,beta][S][beta])
+// Inference in a linear scalar stochastic differential equation in 2D.
+//
+// dX = - lambda*X*dt + sigmaX*dB
+//
+// based on discrete observations
+//
+// Y(i) = X(t(i)) + e(i)
+//
+// where e(i) is N(0,I_2*sigmaY^2)
+//
+// Latent variables are the states.
+//
+// We use Euler approximation to evalaute transition densities. The time mesh for this
+// discretization is finer than the sample interval, i.e. some (many) states are unobserved.
 template<class Type>
 Type objective_function<Type>::operator() ()
 {
@@ -48,13 +61,11 @@ Type objective_function<Type>::operator() ()
   PARAMETER(mu);
   PARAMETER(log_papertau);
   PARAMETER(log_kappa);
-  PARAMETER(log_tau);
   PARAMETER(alpha);
   PARAMETER(log_d);
   PARAMETER(log_sdbehav);
   // Transform log parameters
   Type kappa = exp(log_kappa);
-  Type tau = exp(log_tau);
   Type d = exp(log_d);
   Type sdbehav = exp(log_sdbehav);
   // Create sigma (marginal variance)
@@ -63,16 +74,14 @@ Type objective_function<Type>::operator() ()
   
   // initiate i and j
   int i,j;
-  // ans will be the resulting likelihood
-  Type ans=0;
+  Type ans=0;  // ans will be the resulting likelihood
   // create mean vector
   vector<Type> muvec(S.size());
   // create sparse matrix Q for SPDE
   SparseMatrix<Type> Q = Q_spde_smooth2(spde,kappa);
   muvec=Ind*mu;
   // evaluate [S]
-  // Negative log likelihood
-  ans += SCALE(GMRF(Q), 1/exp(log_papertau))(S - mu);      
+  ans += SCALE(GMRF(Q), 1/exp(log_papertau))(S - mu);      // Negative log likelihood
   // create objects
   matrix<Type> covcond(Y.size(),Y.size());
   vector<Type> muveccond(Y.size());
@@ -81,13 +90,15 @@ Type objective_function<Type>::operator() ()
   vector<Type> diffy(tsim.size()-1);
   vector<Type> gradx(Y.size());
   vector<Type> grady(Y.size());
+  vector<Type> betaAct(Y.size());
   // calculate gradients and covariance/mean of [Y|S,X]
   for (i=0;i<Y.size();i++)
   {
-    covcond(i,i)=tau*tau;
+    covcond(i,i)=0.1;
     gradx(i) =  ((S(meshidxloc(Y.size() + 2*i + 0)) - S(meshidxloc(i)))/(Y1(Y.size() + 2*i + 0) - Y1(i)));
     grady(i) =  ((S(meshidxloc(Y.size() + 2*i + 1)) - S(meshidxloc(i)))/(Y2(Y.size() + 2*i + 1) - Y2(i)));
     muveccond(i) = S(meshidxloc(i));
+    //covcond(i,i)=0.1;
     for ( j=0;j<i;j++)
     {
       covcond(i,j)=0;
@@ -106,13 +117,15 @@ Type objective_function<Type>::operator() ()
   // calculate [X|S]
   for(int k=0; k<(trackId.size()-1); k++){
     for(int i=(trackId(k)+1);i<(trackId(k+1)-1);i++){
-      ans -= dnorm(Y1(i+1),(Y1(i) + (((1-beta(i+1))*diffx(i-1))-(beta(i+1)*(alpha*gradx(i)*S(meshidxloc(i)))))*dt(i)), d*sqrt(dt(i)),1);
-      ans -= dnorm(Y2(i+1),(Y2(i) + (((1-beta(i+1))*diffy(i-1))-(beta(i+1)*(alpha*grady(i)*S(meshidxloc(i)))))*dt(i)), d*sqrt(dt(i)),1);
+      betaAct(i+1) = (exp(beta(i+1))/(1+exp(beta(i+1))));
+      ans -= dnorm(Y1(i+1),(Y1(i) + (((1-betaAct(i+1))*diffx(i-1))-(betaAct(i+1)*(alpha*gradx(i)*S(meshidxloc(i)))))*dt(i)), d*sqrt(dt(i)),1);
+      ans -= dnorm(Y2(i+1),(Y2(i) + (((1-betaAct(i+1))*diffy(i-1))-(betaAct(i+1)*(alpha*grady(i)*S(meshidxloc(i)))))*dt(i)), d*sqrt(dt(i)),1);
     }
-    // Calculate [beta]
-    ans -= dnorm(beta(trackId(k)), Type(0.5), Type(0.000001), 1);
+  }
+  // Calculate [beta]
+  for(int k=0; k<(trackId.size()-1); k++){
     for(int i=(trackId(k));i<(trackId(k+1)-1);i++){
-      ans -= dnorm(beta(i+1), beta(i), dt(i)*sdbehav, 1);
+      ans -= dnorm(beta(i+1), beta(i), sqrt(dt(i))*sdbehav, 1);
     }
   }
   // record sigma

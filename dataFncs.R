@@ -17,10 +17,11 @@ library(INLA)
 #alternative track generation based on gradient of temperature field, not the temperature itself.
 genPrefTrackHybridBehav <- function(n, param, paramGP, nrowcol, m, surface, 
                                     gridFull, model, rawDat, 
-                                    alpha, start, burnIn){
+                                    alpha, start, burnIn, timing){
   # initialise beta (behavioural state)
   betaF <- NULL
   betaF <- c(betaF, alpha[1])
+  behavState <- exp(alpha[1])/(1+exp(alpha[1]))
   # measurement error
   sigmasq.nugget <- paramGP[3]
   # create vector for true surface
@@ -28,20 +29,20 @@ genPrefTrackHybridBehav <- function(n, param, paramGP, nrowcol, m, surface,
   # mux and muy are x and y partial derivatives of H respectively
   # combined these are the drift function in the SDE. Not sure why this
   # function exists since its only valid for t=0 UPDATE
-  mux <- function(x, y, param, tempGrad, temp){
-    Hxy <- alpha[1]*alpha[2]*as.numeric(tempGrad[1])*as.numeric(temp)
+  mux <- function(x, y, param, tempGrad, temp, behavState){
+    Hxy <- behavState*alpha[2]*as.numeric(tempGrad[1])*as.numeric(temp)
     return(Hxy) 
   }
-  muy <- function(x, y, param, tempGrad, temp){
-    Hxy <- alpha[1]*alpha[3]*as.numeric(tempGrad[2])*as.numeric(temp)
+  muy <- function(x, y, param, tempGrad, temp, behavState){
+    Hxy <- behavState*alpha[3]*as.numeric(tempGrad[2])*as.numeric(temp)
     return(Hxy) 
   }
   # mu is the drift function in the SDE for first time point
-  mu <- function(x, y, param, tempGrad, temp){
-    return(cbind(mux(x, y, param, tempGrad, temp),muy(x, y, param, tempGrad, temp)))
+  mu <- function(x, y, param, tempGrad, temp, behavState){
+    return(cbind(mux(x, y, param, tempGrad, temp, behavState),muy(x, y, param, tempGrad, temp, behavState)))
   }
   # muNew is drift function for all points after the first time point
-  muNew <- function(path, param, tempGrad, alpha){
+  muNew <- function(path, param, tempGrad, alpha, behavState){
     # x drift direction
     Hxy1 <- alpha[2]*as.numeric(tempGrad[1])*as.numeric(path[nrow(path),4])
     # y drift direction
@@ -52,8 +53,8 @@ genPrefTrackHybridBehav <- function(n, param, paramGP, nrowcol, m, surface,
     diff <- c((path[nrow(path),2]-path[(nrow(path)-1),2])/timeDiff, 
               (path[nrow(path),3]-path[(nrow(path)-1),3])/timeDiff)
     # caluclate full drift function
-    resx <- ((1-alpha[1])*diff[1] + alpha[1]*Hxy1)
-    resy <- ((1-alpha[1])*diff[2] + alpha[1]*Hxy2)
+    resx <- ((1-behavState)*diff[1] + behavState*Hxy1)
+    resy <- ((1-behavState)*diff[2] + behavState*Hxy2)
     return(cbind(resx, resy))
   }
   # initialise the path
@@ -63,6 +64,8 @@ genPrefTrackHybridBehav <- function(n, param, paramGP, nrowcol, m, surface,
   # column 2 is longitude (x)
   # column 3 is latitude (y)
   # column 4 is S (ie/ temperature)
+  # column 5 is x gradient
+  # column 6 is y gradient
   if(start==0){
     obs <- c(0,runif(1,-150,150),runif(1,-150,150))
   }else{
@@ -79,19 +82,20 @@ genPrefTrackHybridBehav <- function(n, param, paramGP, nrowcol, m, surface,
   # update path to include temperature
   obs <- c(obs,obsT)
   time <- 0
-  path <- rbind(path,obs)
+  path <- rbind(path,c(obs, NA, NA))
   # simulate first movement
   repeat{ 
     # simulate time difference
-    timePart <- rexp(1,10)#rexp(1,1)
+    timePart <- rexp(1,timing) + 0.003
     # simulate change in behaviour state
-    alpha[1] <- rnorm(1, alpha[1], param[1]*timePart)
+    alpha[1] <- rnorm(1, alpha[1], param[1]*sqrt(timePart))
+    behavState <- exp(alpha[1])/(1+exp(alpha[1]))
     # calculate movement error
     errX <- sqrt(timePart)*param[2]*mvrnorm(n = 1, c(0,0), diag(2), tol = 1e-6, empirical = FALSE, EISPACK = FALSE)
     # update total elapsed time
     time <- time + timePart
     # update path of trajectory using Brillinger's SDE linear approximation
-    obs <- c(time, as.numeric(path[1,2:3]) + (as.numeric(path[1,4])*mu(path[1,2], path[1,3], param, tempGrad, path[1,4])*
+    obs <- c(time, as.numeric(path[1,2:3]) + (as.numeric(path[1,4])*mu(path[1,2], path[1,3], param, tempGrad, path[1,4], behavState)*
                                                 (timePart)) + errX, path[1,4]) 
     if(abs(obs[2])<150 && abs(obs[3])<150) {
       break
@@ -104,7 +108,7 @@ genPrefTrackHybridBehav <- function(n, param, paramGP, nrowcol, m, surface,
                           nrowcol=nrowcol)
   # include nugget error on temperature
   obs[4] <- rnorm(1, mean=obsT, sd=sqrt(sigmasq.nugget))
-  path <- rbind(path,obs)
+  path <- rbind(path,c(obs, tempGrad))
   gridFullL <- rbind(gridFullL, obs[2:3])
   S.vec <- c(S.vec, obsT)
   # now simulate track   
@@ -112,15 +116,16 @@ genPrefTrackHybridBehav <- function(n, param, paramGP, nrowcol, m, surface,
   # time intervals are currently drawn from iid exponential(1)
   for(i in 2:n){ 
       # simulate time step
-      timePart <- rexp(1,10)
+      timePart <- rexp(1,timing) + 0.003
       # simulate behavioural state
-      alpha[1] <- rnorm(1, alpha[1], param[1]*timePart)
+      alpha[1] <- rnorm(1, alpha[1], param[1]*sqrt(timePart))
+      behavState <- exp(alpha[1])/(1+exp(alpha[1]))
       # movement diffusion 
       errX <- sqrt(timePart)*param[2]*mvrnorm(n = 1, c(0,0), diag(2), tol = 1e-6, empirical = FALSE, EISPACK = FALSE)
       # update total elapsed time
       time <- time + timePart
       # update path of trajectory using Brillinger's SDE linear approximation
-      obs <- c(time, as.numeric(path[i,2:3]) + (muNew(path, param, tempGrad, alpha)*(timePart)) + errX, path[i,4]) 
+      obs <- c(time, as.numeric(path[i,2:3]) + (muNew(path, param, tempGrad, alpha, behavState)*(timePart)) + errX, path[i,4]) 
       # break if outside 'safezone'
       if(abs(obs[2])>150|abs(obs[3])>150){
         break
@@ -130,7 +135,7 @@ genPrefTrackHybridBehav <- function(n, param, paramGP, nrowcol, m, surface,
                                 nrowcol=nrowcol)
         # add nugget
         obs[4] <- rnorm(1, mean=obsT, sd=sqrt(sigmasq.nugget))
-        path <- rbind(path,obs)
+        path <- rbind(path,c(obs, tempGrad))
         gridFullL <- rbind(gridFullL, obs[2:3])
         S.vec <- c(S.vec, obsT)
         #print(path)
@@ -141,7 +146,7 @@ genPrefTrackHybridBehav <- function(n, param, paramGP, nrowcol, m, surface,
   # no measurement noise
   path[,2] <- path[,2]+rnorm(nrow(path), 0, sqrt(m))
   path[,3] <- path[,3]+rnorm(nrow(path), 0, sqrt(m))
-   path  <- cbind(path, betaF)
+  path  <- cbind(path, betaF)
   #Include burn in period.
   if(burnIn>0){
     if(nrow(path)>burnIn){
@@ -161,9 +166,11 @@ genPrefTrackHybridBehav <- function(n, param, paramGP, nrowcol, m, surface,
 # type=1 then movement based on temperature gradient (more realistic)
 # start = 0 means uniform starting point (random), o/w multivariate normal with mean 0 and variance=start
 # burnIn is number of burn in points (default 6). If burnIn=0 then no burn in
+# timing is rate parameter for exponential distribution used to generate time difference between samples
 genPrefDataHybridBehav <- function(n, movementParam, nrowcol, m, paramGP,
                                    numTracks, alpha=c(1,0), 
-                                   rawDat=cbind(0,0,0),  start=0, burnIn=6){
+                                   rawDat=cbind(0,0,0),  start=0, burnIn=6,
+                                   timing=10){
   param <- movementParam
   # Gaussian process parameters
   mean <- paramGP[1]
@@ -186,7 +193,7 @@ genPrefDataHybridBehav <- function(n, movementParam, nrowcol, m, paramGP,
   # make sure each track is of a certain length
   repeat{
     Dat <- genPrefTrackHybridBehav(n, param, paramGP, nrowcol, m, surface, gridFull, 
-                                   model, rawDat, alpha, start, burnIn)
+                                   model, rawDat, alpha, start, burnIn, timing)
     if (nrow(Dat) > (n/2)) break
   }    
   # label these tracks with a 1
@@ -196,7 +203,7 @@ genPrefDataHybridBehav <- function(n, movementParam, nrowcol, m, paramGP,
     for(i in 2:numTracks){
       repeat{
         Dat1 <- genPrefTrackHybridBehav(n, param, paramGP, nrowcol, m, surface, gridFull, 
-                                        model, rawDat, alpha,  start, burnIn)
+                                        model, rawDat, alpha,  start, burnIn, timing)
         # make sure each track is of a certain length
         if (nrow(Dat1) > (n/2)) break
       }

@@ -7,13 +7,13 @@ IGN <- function(pred, act, var) {
 # constant mean
 mean <- 5
 # scale (range)
-phi <- 15 
+phi <- 25 
 # nugget (measurement) variance
 nugget <- 0.1
 # smoothness (assumed known in estimation)
 kappa <- 2
 # marginal variance (partial sill)
-GPVar  <- 3
+GPVar  <- 1.5
 # define the covariance model
 model <- RMwhittle(nu=kappa, var=GPVar, scale=phi)
 # finally trend = 0 just means our mean trend is constant (mean from above)
@@ -25,21 +25,23 @@ start <- 0
 # alpha[1] defines starting value of beta_1 from eq (3.5)
 # alpha[2:3] are currently both equal to \alpha from eq (3.2). They could be changed to
 # adopt preferential movement varying in strength across latitude/longitude.
-alpha <- c(.5, 150,150) 
+alpha <- c(-1.5, 100, 100)
 # the number of tracks in the simulation
 numTracks <- 3
 # the number of data points to simulate per track
-n <- 120
+n <- 360
 # the number of observations to throw out per track (ie/ total sample
 # size per track is n-burnIn)
-burnIn <- 20
+burnIn <- 60
+# the rate parameter of the exponential distribution used to generate the sampling times
+timing <-  10
 # measurement location noise (currently not included in models)
 noise <- 0
 # movement parameters
 # behaviour (beta) standard deviation parameter (\sigma_{\beta} in eq (3.5))
 behavSD <- .1 
 # movement standard deviation parameter (diag(\Sigma) in eq (3.3))
-moveSD <- 12 
+moveSD <- 3 
 # combine standard deviations for later use
 dataParam <- c(behavSD, moveSD)
 
@@ -73,34 +75,47 @@ krigIGN <- NULL
 nonPrefIGN <- NULL
 nonPrefParams <- array(NA, dim=c(1, 4))
 prefParams <- array(NA, dim=c(1, 8))
-set.seed(1)
-
+set.seed(6351)
 # simulate the random field
 rawDat <- RFsimulate(model, x=as.matrix(gridFull),  exactness=TRUE)
 # simulate the observations and sampling locations
 Xsim <- genPrefDataHybridBehav(n=n, movementParam=dataParam, nrowcol=nrowcol, m=0, 
                                paramGP=c(mean, phi, nugget, kappa, GPVar), numTracks=numTracks, 
-                               alpha=alpha, rawDat=rawDat, start=start, burnIn = burnIn)
+                               alpha=alpha, rawDat=rawDat, start=start, burnIn = burnIn, timing=timing)
 # extract sampling data
 data <- Xsim$Dat
 # extract true surface data
 surface <- Xsim$surface
-colnames(data) <- c("Time", "Lon", "Lat", "Temp", "Beta", "Track")
+colnames(data) <- c("Time", "Lon", "Lat", "Temp", "gradientX", "gradientY", "Beta", "Track")
 # here is how the data (locations and respective latent field measurements)
 head(data)
-
+# plot of generated data
 image.plot(x,y,matrix(rawDat$variable1+mean, nrow=51, ncol=51),
            xlab="Longitude", ylab="Latitude", col=rev(heat.colors(10)))
 totalPoints = 0
 colourList <- c("purple", "blue", "green", "grey30", "black", "pink")
 for(k in 1:numTracks){
-  numPoints <- sum(Xsim$Dat$V6==k)
+  numPoints <- sum(Xsim$Dat$V8==k)
   points(Xsim$Dat$V2[(totalPoints+1):(totalPoints+numPoints)],
          Xsim$Dat$V3[(totalPoints+1):(totalPoints+numPoints)], type='b', pch=19, cex=.5, col=colourList[k])
   totalPoints <- totalPoints + numPoints
 }
-
-
+# now we thin the data to 300 locations in total for analysis 
+selection <- seq(1, nrow(data), length.out = 300)
+dataThin <- data[selection, ]
+# plot of data to be analysed
+image.plot(x,y,matrix(rawDat$variable1+mean, nrow=51, ncol=51),
+           xlab="Longitude", ylab="Latitude", col=rev(heat.colors(10)))
+totalPoints = 0
+colourList <- c("purple", "blue", "green", "grey30", "black", "pink")
+for(k in 1:numTracks){
+  numPoints <- sum(dataThin$Track==k)
+  points(dataThin$Lon[(totalPoints+1):(totalPoints+numPoints)],
+         dataThin$Lat[(totalPoints+1):(totalPoints+numPoints)], type='b', pch=19, cex=.5, col=colourList[k])
+  totalPoints <- totalPoints + numPoints
+}
+# replace data with thinned version
+data=dataThin
 # obtain sampling times
 tsim <- data[,1]
 # number of observations in total
@@ -110,7 +125,7 @@ numObs <- nrow(data)
 trackLength <- NULL
 trackId <- 0
 for(i in 1:numTracks){
-  trackLength <- c(trackLength, length(which(data[,6]==i)))
+  trackLength <- c(trackLength, length(which(data$Track==i)))
   trackId <- c(trackId, sum(trackLength))
 }
 # create a set of locations which allows for gradients to be calculated in cpp file
@@ -154,11 +169,10 @@ standardMLE <- likfit(geodata, coords = geodata$coords, data = geodata$data, kap
 
 parameters <- list(
   S = rep(0, n_s),
-  beta = rep(0.5, length(dataTMB$Y)),
+  beta = rep(0, length(dataTMB$Y)),
   mu = standardMLE$beta,
   log_papertau = 3,
   log_kappa = log(1/standardMLE$phi),
-  log_tau = log(standardMLE$tausq),
   alpha = rnorm(1,alpha[2], 0.25),
   log_d = log(dataParam[2]),
   log_sdbehav = log(dataParam[1])
@@ -168,6 +182,18 @@ parameters <- list(
 obj <- MakeADFun(dataTMB, parameters, random=c("S", "beta"), DLL="TMBfile", method = "nlminb", hessian=FALSE, silent=T)
 # conduct maximisation
 opt <- try( nlminb(obj$par,obj$fn,obj$gr, control=list(rel.tol=1e-7)) )
+# rerun up to 4 times in case of any gradient errors
+for(m in 1:4){
+  if(class(opt) != 'try-error' && opt$convergence == 0) {
+    print("Success!")
+  }
+  else{ 
+    paste0("Failed, try number ", m)
+    lengthPar <- length(obj$env$last.par.best)
+    tmp <- obj$env$last.par.best[(lengthPar-5):lengthPar] + 0.01
+    opt <- try(nlminb(tmp,obj$fn,obj$gr, control=list(rel.tol=1e-7)))
+  }
+}
 # Extract sigma^2 (partial sill)
 report_spde <- obj$report()
 
@@ -211,7 +237,6 @@ NAsampLocs <- rep(NA, nrow(lattice))
 distMatLarge <- as.matrix(dist(rbind(lattice, sampLocs)))[(nrow(lattice)+1):(nrow(sampLocs) + nrow (lattice)), 1 : nrow(lattice)]
 for(i in 1:nrow(lattice)){
   distMin <- min(as.matrix(dist(rbind(lattice[i,], sampLocs)))[1,-1])
-  # distMin <- which.min(dist(rbind(predGrid[i,], realGrid)))
   if(distMin<45){NAsampLocs[i] <- 1}
   else{}
 }
@@ -238,7 +263,7 @@ image.plot(xseq,yseq,matrix(rawDatSmallNA, nrow=26, ncol=26),
 totalPoints = 0
 colourList <- c("purple", "blue", "green", "grey30", "black", "pink")
 for(k in 1:numTracks){
-  numPoints <- sum(Xsim$Dat$V6==k)
+  numPoints <- sum(Xsim$Dat$V8==k)
   points(Xsim$Dat$V2[(totalPoints+1):(totalPoints+numPoints)],
          Xsim$Dat$V3[(totalPoints+1):(totalPoints+numPoints)], type='b', pch=19, cex=.5, col=colourList[k])
   totalPoints <- totalPoints + numPoints
@@ -248,7 +273,7 @@ image.plot(xseq,yseq,matrix(modePredNA, nrow=26, ncol=26),
 totalPoints = 0
 colourList <- c("purple", "blue", "green", "grey30", "black", "pink")
 for(k in 1:numTracks){
-  numPoints <- sum(Xsim$Dat$V6==k)
+  numPoints <- sum(Xsim$Dat$V8==k)
   points(Xsim$Dat$V2[(totalPoints+1):(totalPoints+numPoints)],
          Xsim$Dat$V3[(totalPoints+1):(totalPoints+numPoints)], type='b', pch=19, cex=.5, col=colourList[k])
   totalPoints <- totalPoints + numPoints
@@ -258,7 +283,7 @@ image.plot(xseq,yseq,matrix(nonPrefPredNA, nrow=26, ncol=26),
 totalPoints = 0
 colourList <- c("purple", "blue", "green", "grey30", "black", "pink")
 for(k in 1:numTracks){
-  numPoints <- sum(Xsim$Dat$V6==k)
+  numPoints <- sum(Xsim$Dat$V8==k)
   points(Xsim$Dat$V2[(totalPoints+1):(totalPoints+numPoints)],
          Xsim$Dat$V3[(totalPoints+1):(totalPoints+numPoints)], type='b', pch=19, cex=.5, col=colourList[k])
   totalPoints <- totalPoints + numPoints
@@ -269,7 +294,7 @@ image.plot(xseq,yseq,matrix(IgnScorePostNA, nrow=26, ncol=26),
 totalPoints = 0
 colourList <- c("purple", "blue", "green", "grey30", "black", "pink")
 for(k in 1:numTracks){
-  numPoints <- sum(Xsim$Dat$V6==k)
+  numPoints <- sum(Xsim$Dat$V8==k)
   points(Xsim$Dat$V2[(totalPoints+1):(totalPoints+numPoints)],
          Xsim$Dat$V3[(totalPoints+1):(totalPoints+numPoints)], type='b', pch=19, cex=.5, col=colourList[k])
   totalPoints <- totalPoints + numPoints
@@ -279,7 +304,7 @@ image.plot(xseq,yseq,matrix(IgnScoreNonPrefNA, nrow=26, ncol=26),
 totalPoints = 0
 colourList <- c("purple", "blue", "green", "grey30", "black", "pink")
 for(k in 1:numTracks){
-  numPoints <- sum(Xsim$Dat$V6==k)
+  numPoints <- sum(Xsim$Dat$V8==k)
   points(Xsim$Dat$V2[(totalPoints+1):(totalPoints+numPoints)],
          Xsim$Dat$V3[(totalPoints+1):(totalPoints+numPoints)], type='b', pch=19, cex=.5, col=colourList[k])
   totalPoints <- totalPoints + numPoints
