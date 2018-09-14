@@ -31,13 +31,13 @@ First we set the parameters of the assumed Matern covariance function and the (c
 # constant mean
 mean <- 5
 # scale (range)
-phi <- 15 
+phi <- 25 
 # nugget (measurement) variance
 nugget <- 0.1
 # smoothness (assumed known in estimation)
 kappa <- 2
 # marginal variance (partial sill)
-GPVar  <- 3
+GPVar  <- 1.5
 # define the covariance model
 model <- RMwhittle(nu=kappa, var=GPVar, scale=phi)
 # finally trend = 0 just means our mean trend is constant (mean from above)
@@ -50,24 +50,26 @@ Next we specify the parameters that determine the movement/sampler properties. P
 # is starting location random? (0 = yes and >0 multivariate normal with
 # mean 0 and diagonal covariance matrix with variance=start)
 start <- 0
-# alpha[1] defines starting value of beta_1 from eq (3.5)
-# alpha[2:3] are currently both equal to \alpha from eq (3.2). They could be changed to
+# alpha[1] defines starting value of beta_1 from eq (3.6)
+# alpha[2:3] are currently both equal to \alpha from eq (3.7). They could be changed to
 # adopt preferential movement varying in strength across latitude/longitude.
-alpha <- c(.5, 150, 150) 
+alpha <- c(-1.5, 100, 100)
 # the number of tracks in the simulation
-numTracks <- 4
+numTracks <- 3
 # the number of data points to simulate per track
-n <- 80
+n <- 360
 # the number of observations to throw out per track (ie/ total sample
 # size per track is n-burnIn)
-burnIn <- 20
+burnIn <- 60
+# the rate parameter of the exponential distribution used to generate the sampling times
+timing <-  10
 # measurement location noise (currently not included in models)
 noise <- 0
 # movement parameters
-# behaviour (beta) standard deviation parameter (\sigma_{\beta} in eq (3.5))
+# behaviour (beta) standard deviation parameter (\sigma_{\beta} in eq (3.6))
 behavSD <- .1 
 # movement standard deviation parameter (diag(\Sigma) in eq (3.3))
-moveSD <- 12 
+moveSD <- 3 
 # combine standard deviations for later use
 dataParam <- c(behavSD, moveSD)
 ```
@@ -111,30 +113,43 @@ Now we are ready to generate the data. We first simulate the latent field and th
 
 ``` r
 # simulate the random field
-set.seed(1)
+set.seed(6351)
 rawDat <- RFsimulate(model, x=as.matrix(gridFull),  exactness=TRUE)
 # simulate the observations and sampling locations
 Xsim <- genPrefDataHybridBehav(n=n, movementParam=dataParam, nrowcol=nrowcol, m=0, 
                                paramGP=c(mean, phi, nugget, kappa, GPVar), numTracks=numTracks, 
-                               alpha=alpha, rawDat=rawDat, start=start, burnIn = burnIn)
+                               alpha=alpha, rawDat=rawDat, start=start, burnIn = burnIn, timing=timing)
 # extract sampling data
 data <- Xsim$Dat
 # extract true surface data
 surface <- Xsim$surface
-colnames(data) <- c("Time", "Lon", "Lat", "Temp", "Beta", "Track")
+colnames(data) <- c("Time", "Lon", "Lat", "Temp", "gradientX", "gradientY", "Beta", "Track")
 # here is how the data (locations and respective latent field measurements)
 head(data)
 ```
 
-    ##        Time        Lon        Lat     Temp      Beta Track
-    ## 1 0.0000000  -4.109334  -85.63149 5.085735 0.5073743     1
-    ## 2 0.2139963 -30.402035 -109.75711 6.749778 0.5005834     1
-    ## 3 0.2189868 -29.278130 -108.76321 6.382570 0.5008400     1
-    ## 4 0.2661443 -25.649978 -105.95862 6.503200 0.4983315     1
-    ## 5 0.3997398 -10.621576  -95.71326 4.955609 0.5221208     1
-    ## 6 0.5041566  -4.527735  -87.21801 4.935147 0.5091465     1
+    ##         Time      Lon      Lat     Temp  gradientX   gradientY      Beta
+    ## 1 0.00000000 90.62477 83.41096 4.222824 0.01650040 -0.02259048 -1.217568
+    ## 2 0.03895239 90.22061 82.80155 4.167551 0.01499146 -0.02558380 -1.255394
+    ## 3 0.08395329 89.59377 82.23768 4.119081 0.01388511 -0.02918536 -1.267580
+    ## 4 0.11661354 88.57083 82.05452 3.890522 0.01444768 -0.03325392 -1.257057
+    ## 5 0.29282906 84.62312 80.91155 3.690016 0.01259540 -0.04931482 -1.254136
+    ## 6 0.32905096 85.08989 80.72604 3.703261 0.01180773 -0.04797840 -1.273623
+    ##   Track
+    ## 1     1
+    ## 2     1
+    ## 3     1
+    ## 4     1
+    ## 5     1
+    ## 6     1
 
-Here is how the data looks. Each colour is a different track and dots are sampling locations which are superimposed onto the unknown latent field.
+``` r
+# now we thin the data to 300 locations in total for analysis 
+selection <- seq(1, nrow(data), length.out = 300)
+dataThin <- data[selection, ]
+```
+
+Here is how the data looks. Each colour is a different track and dots are sampling locations which are superimposed onto the unknown latent field. Note, that this is the same data from Fig 2.
 
 ![](README_files/figure-markdown_github/plotdata-1.png)
 
@@ -148,6 +163,8 @@ dyn.load(dynlib("TMBfile"))
 Next is some house keeping to prepare the data for TMB (refer to the comments inside the script below for details):
 
 ``` r
+# replace data with thinned version
+data=dataThin
 # obtain sampling times
 tsim <- data[,1]
 # number of observations in total
@@ -157,7 +174,7 @@ numObs <- nrow(data)
 trackLength <- NULL
 trackId <- 0
 for(i in 1:numTracks){
-  trackLength <- c(trackLength, length(which(data[,6]==i)))
+  trackLength <- c(trackLength, length(which(data$Track==i)))
   trackId <- c(trackId, sum(trackLength))
 }
 # create a set of locations which allows for gradients to be calculated in cpp file
@@ -230,21 +247,20 @@ standardMLE <- likfit(geodata, coords = geodata$coords, data = geodata$data, kap
 
     ## likfit: estimated model parameters:
     ##      beta     tausq   sigmasq       phi 
-    ## " 4.4319" " 0.0739" " 2.7101" "15.8464" 
-    ## Practical Range with cor=0.05 for asymptotic range: 85.06966
+    ## " 4.3058" " 0.1093" " 0.7261" "18.5567" 
+    ## Practical Range with cor=0.05 for asymptotic range: 99.6194
     ## 
-    ## likfit: maximised log-likelihood = -122.8
+    ## likfit: maximised log-likelihood = -170.3
 
 Next we will fit the model in `TMB`. First we define the parameters for the model (including latent states). Our latent states are the field **S** and behavioural states **beta**. The call to `MakeADFun` creates the likelihood function, which is then optimized numerically using `nlminb` (but other general-purpose optimization functions, e.g. `optim`, can also be considered).
 
 ``` r
 parameters <- list(
   S = rep(0, n_s),
-  beta = rep(0.5, length(dataTMB$Y)),
+  beta = rep(0, length(dataTMB$Y)),
   mu = standardMLE$beta,
   log_papertau = 3,
   log_kappa = log(1/standardMLE$phi),
-  log_tau = log(standardMLE$tausq),
   alpha = rnorm(1,alpha[2], 0.25),
   log_d = log(dataParam[2]),
   log_sdbehav = log(dataParam[1])
@@ -254,6 +270,26 @@ parameters <- list(
 obj <- MakeADFun(dataTMB, parameters, random=c("S", "beta"), DLL="TMBfile", method = "nlminb", hessian=FALSE, silent=T)
 # conduct maximisation
 opt <- try( nlminb(obj$par,obj$fn,obj$gr, control=list(rel.tol=1e-7)) )
+# rerun up to 4 times in case of any gradient errors
+for(m in 1:4){
+  if(class(opt) != 'try-error' && opt$convergence == 0) {
+    print("Success!")
+  }
+  else{ 
+    paste0("Failed, try number ", m)
+    lengthPar <- length(obj$env$last.par.best)
+    tmp <- obj$env$last.par.best[(lengthPar-5):lengthPar] + 0.01
+    opt <- try(nlminb(tmp,obj$fn,obj$gr, control=list(rel.tol=1e-7)))
+  }
+}
+```
+
+    ## [1] "Success!"
+    ## [1] "Success!"
+    ## [1] "Success!"
+    ## [1] "Success!"
+
+``` r
 # Extract sigma^2 (partial sill)
 report_spde <- obj$report()
 ```
@@ -277,13 +313,12 @@ if( class(sdre) != 'try-error') {
 ```
 
     ##                Estimate  Std. Error
-    ## mu             4.939458  0.70357739
-    ## log_papertau   3.539569  0.16696319
-    ## log_kappa     -2.869189  0.14946801
-    ## log_tau       -1.285581  0.05806115
-    ## alpha        174.620945 23.13155555
-    ## log_d          2.574603  0.03588378
-    ## log_sdbehav   -1.870642  0.31034349
+    ## mu             4.406319  0.24327250
+    ## log_papertau   4.215612  0.21093490
+    ## log_kappa     -2.830299  0.15373855
+    ## alpha        142.870640 25.55025060
+    ## log_d          2.209733  0.03291732
+    ## log_sdbehav   -2.733629  1.25336438
 
 Prediction
 ----------
@@ -337,14 +372,14 @@ IgnScoreNonPref <- IGN(nonPredPref$predict, rawDatSmall, nonPredPref$krige.var)
 mean(IgnScorePost)
 ```
 
-    ## [1] 1.170347
+    ## [1] -0.5294663
 
 ``` r
 mean(IgnScoreNonPref)
 ```
 
-    ## [1] 1.299883
+    ## [1] -0.3737076
 
 Finally we can plot the IGN scores and compare predictive surfaces from the non-preferential and preferential models. We consider only prediction locations in regions near the sampling locations: ![](README_files/figure-markdown_github/showign-1.png)![](README_files/figure-markdown_github/showign-2.png)![](README_files/figure-markdown_github/showign-3.png)
 
-Note that the mean IGN for the following two plots are 0.41 (TMB) and 0.64 (kriging) respectively. ![](README_files/figure-markdown_github/plotign2-1.png)![](README_files/figure-markdown_github/plotign2-2.png)
+Note that the mean IGN for the following two plots are -0.96 (TMB) and -0.88 (kriging) respectively. Comparing this to Fig 5 (b), this simulation shows a relatively small improvement by the preferential model compared to most simulations with these parameters, mainly due to the large coverage of the field by the data locations. ![](README_files/figure-markdown_github/plotign2-1.png)![](README_files/figure-markdown_github/plotign2-2.png)
