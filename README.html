@@ -1,0 +1,276 @@
+
+<h1>Preferential Sampling with moving monitoring stations</h1>
+<p>This repository is a companion resource to the paper “Modelling ocean temperatures from bio-probes under preferential sampling” (submitted), by Daniel Dinsdale and Matias Salibian-Barrera and it contains code to illustrate how to apply the methods discussed in that paper.</p>
+<h2>Introduction</h2>
+<p>Below we illustrate how to model data obtained from sensor tags mounted on marine mammals which may have been preferentially sampled. The <code style="font-family: Menlo, Consolas, &quot;DejaVu Sans Mono&quot;, monospace;">R</code> code used below in this document can also be found in a single file here: <a href="runfile.R">runfile.R</a>. The required functions are in the file <a href="dataFncs.R">dataFncs.R</a>, and the negative log-likelihood function required by <a href="https://cran.r-project.org/package=TMB">TMB</a> is in the file <a href="TMBfile.cpp">TMBfile.cpp</a>.</p>
+<p>The example below follows the simulation settings discussed in Section 4 of the paper and uses the Preferential-CRW model to generate preferentially sampled animal tracks and their corresponding temperature observations. We then compare parameter estimation and prediction using standard methods and the preferential model in TMB.</p>
+<h5>Warning</h5>
+<p>Note that running this code may require a large amount of RAM (we recommend 16GB).</p>
+<h2>Generating a data set</h2>
+<p>First we source the file <a href="dataFncs.R">dataFncs.R</a> which contains the necessary functions to generate the data.</p>
+<pre class="editor-colors lang-r"><span><span class="syntax--text syntax--plain syntax--null-grammar">source('dataFncs.R')</span></span></pre>
+<p>Now we specify the parameters to generate the data set. These can be altered to vary the properties of the latent field to be sampled and also to change the movement patterns of the sampler. Refer to the paper for more details on the model.</p>
+<p>First we set the parameters of the assumed Matern covariance function and the (constant) mean of the underlying random field:</p>
+<pre class="editor-colors lang-r"><span><span class="syntax--text syntax--plain syntax--null-grammar"># constant mean</span></span>
+<span class=""><span class="syntax--text syntax--plain syntax--null-grammar">mean &lt;- 5</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar"># scale (range)</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar">phi &lt;- 25<span class="trailing-whitespace"> </span></span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar"># nugget (measurement) variance</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar">nugget &lt;- 0.1</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar"># smoothness (assumed known in estimation)</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar">kappa &lt;- 2</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar"># marginal variance (partial sill)</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar">GPVar  &lt;- 1.5</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar"># define the covariance model</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar">model &lt;- RMwhittle(nu=kappa, var=GPVar, scale=phi)</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar"># finally trend = 0 just means our mean trend is constant (mean from above)</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar">trend &lt;- 0</span></span></pre>
+<p>Next we specify the parameters that determine the movement/sampler properties. Please refer to the paper for more details on the model and its parameters.</p>
+<pre class="editor-colors lang-r"><span><span class="syntax--text syntax--plain syntax--null-grammar"># is starting location random? (0 = yes and &gt;0 multivariate normal with</span></span>
+<span class=""><span class="syntax--text syntax--plain syntax--null-grammar"># mean 0 and diagonal covariance matrix with variance=start)</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar">start &lt;- 0</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar"># alpha[1] defines starting value of beta_1 from eq (3.6)</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar"># alpha[2:3] are currently both equal to \alpha from eq (3.7). They could be changed to</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar"># adopt preferential movement varying in strength across latitude/longitude.</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar">alpha &lt;- c(-1.5, 100, 100)</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar"># the number of tracks in the simulation</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar">numTracks &lt;- 3</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar"># the number of data points to simulate per track</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar">n &lt;- 360</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar"># the number of observations to throw out per track (ie/ total sample</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar"># size per track is n-burnIn)</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar">burnIn &lt;- 60</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar"># the rate parameter of the exponential distribution used to generate the sampling times</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar">timing &lt;-  10</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar"># measurement location noise (currently not included in models)</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar">noise &lt;- 0</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar"># movement parameters</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar"># behaviour (beta) standard deviation parameter (\sigma_{\beta} in eq (3.6))</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar">behavSD &lt;- .1<span class="trailing-whitespace"> </span></span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar"># movement standard deviation parameter (diag(\Sigma) in eq (3.3))</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar">moveSD &lt;- 3<span class="trailing-whitespace"> </span></span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar"># combine standard deviations for later use</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar">dataParam &lt;- c(behavSD, moveSD)</span></span></pre>
+<p>We now create a spatial grid (lattice) for data simulation and also for model fitting/predictions. These can be the same if <code style="font-family: Menlo, Consolas, &quot;DejaVu Sans Mono&quot;, monospace;">nrowcol = l</code> (the latter is a lowercase letter <code style="font-family: Menlo, Consolas, &quot;DejaVu Sans Mono&quot;, monospace;">L</code>) but we can choose different grid sizes for computational efficiency.</p>
+<pre class="editor-colors lang-r"><span><span class="syntax--text syntax--plain syntax--null-grammar"># define the domain to simulate data</span></span>
+<span class=""><span class="syntax--text syntax--plain syntax--null-grammar"># how man rows/columns</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar">nrowcol &lt;- 51</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar">x &lt;- seq(-150, 150, length.out=nrowcol)</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar">y &lt;- seq(-150, 150, length.out=nrowcol)</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar"># simulation grid</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar">gridFull &lt;- expand.grid(x,y)</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar"></span></span> 
+<span><span class="syntax--text syntax--plain syntax--null-grammar"># l is the number of grid cells in each direction across our</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar"># grid going from -150 to 150 degrees lat and lon for our model fitting</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar"># and prediction.</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar">l &lt;- 26</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar">xseq &lt;- (seq(-150, 150, length.out=l))</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar">yseq &lt;- (seq(-150, 150, length.out=l))</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar"># create the prediction lattice</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar">lattice &lt;- expand.grid(xseq,yseq)</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar">colnames(lattice) &lt;- c("Y1New", "Y2New")</span></span></pre>
+<!-- ```{r initiate, include=FALSE} -->
+<!-- # initiate objects -->
+<!-- # nonPrefParams <- NULL -->
+<!-- # prefParams <- NULL -->
+<!-- # postBias <- NULL -->
+<!-- # krigBias <- NULL -->
+<!-- # nonPrefBias <- NULL -->
+<!-- # postIGN <-  NULL -->
+<!-- # krigIGN <- NULL -->
+<!-- # nonPrefIGN <- NULL -->
+<!-- # nonPrefParams <- array(NA, dim=c(1, 4)) -->
+<!-- # prefParams <- array(NA, dim=c(1, 8)) -->
+<!-- ``` -->
+<p>Now we are ready to generate the data. We first simulate the latent field and then run the sampler using the function <code style="font-family: Menlo, Consolas, &quot;DejaVu Sans Mono&quot;, monospace;">genPrefDataHybridBehav</code> which can be found in <code style="font-family: Menlo, Consolas, &quot;DejaVu Sans Mono&quot;, monospace;">dataFncs.R</code>. From here we will extract the data and the so-called true surface on the lattice and observed locations.</p>
+<pre class="editor-colors lang-r"><span><span class="syntax--text syntax--plain syntax--null-grammar"># simulate the random field</span></span>
+<span class=""><span class="syntax--text syntax--plain syntax--null-grammar">set.seed(6351)</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar">rawDat &lt;- RFsimulate(model, x=as.matrix(gridFull),  exactness=TRUE)</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar"># simulate the observations and sampling locations</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar">Xsim &lt;- genPrefDataHybridBehav(n=n, movementParam=dataParam, nrowcol=nrowcol, m=0,<span class="trailing-whitespace"> </span></span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar"><span class="leading-whitespace">                               </span>paramGP=c(mean, phi, nugget, kappa, GPVar), numTracks=numTracks,<span class="trailing-whitespace"> </span></span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar"><span class="leading-whitespace">                               </span>alpha=alpha, rawDat=rawDat, start=start, burnIn = burnIn, timing=timing)</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar"># extract sampling data</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar">data &lt;- Xsim$Dat</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar"># extract true surface data</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar">surface &lt;- Xsim$surface</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar">colnames(data) &lt;- c("Time", "Lon", "Lat", "Temp", "gradientX", "gradientY", "Beta", "Track")</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar"># here is how the data (locations and respective latent field measurements)</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar">head(data)</span></span></pre>
+<pre class="editor-colors lang-text"><span><span class="syntax--text syntax--plain"><span class="syntax--meta syntax--paragraph syntax--text">##         Time      Lon      Lat     Temp  gradientX   gradientY      Beta</span></span></span>
+<span class=""><span class="syntax--text syntax--plain"><span class="syntax--meta syntax--paragraph syntax--text">## 1 0.00000000 90.62477 83.41096 4.222824 0.01650040 -0.02259048 -1.217568</span></span></span>
+<span><span class="syntax--text syntax--plain"><span class="syntax--meta syntax--paragraph syntax--text">## 2 0.03895239 90.22061 82.80155 4.167551 0.01499146 -0.02558380 -1.255394</span></span></span>
+<span><span class="syntax--text syntax--plain"><span class="syntax--meta syntax--paragraph syntax--text">## 3 0.08395329 89.59377 82.23768 4.119081 0.01388511 -0.02918536 -1.267580</span></span></span>
+<span><span class="syntax--text syntax--plain"><span class="syntax--meta syntax--paragraph syntax--text">## 4 0.11661354 88.57083 82.05452 3.890522 0.01444768 -0.03325392 -1.257057</span></span></span>
+<span><span class="syntax--text syntax--plain"><span class="syntax--meta syntax--paragraph syntax--text">## 5 0.29282906 84.62312 80.91155 3.690016 0.01259540 -0.04931482 -1.254136</span></span></span>
+<span><span class="syntax--text syntax--plain"><span class="syntax--meta syntax--paragraph syntax--text">## 6 0.32905096 85.08989 80.72604 3.703261 0.01180773 -0.04797840 -1.273623</span></span></span>
+<span><span class="syntax--text syntax--plain"><span class="syntax--meta syntax--paragraph syntax--text">##   Track</span></span></span>
+<span><span class="syntax--text syntax--plain"><span class="syntax--meta syntax--paragraph syntax--text">## 1     1</span></span></span>
+<span><span class="syntax--text syntax--plain"><span class="syntax--meta syntax--paragraph syntax--text">## 2     1</span></span></span>
+<span><span class="syntax--text syntax--plain"><span class="syntax--meta syntax--paragraph syntax--text">## 3     1</span></span></span>
+<span><span class="syntax--text syntax--plain"><span class="syntax--meta syntax--paragraph syntax--text">## 4     1</span></span></span>
+<span><span class="syntax--text syntax--plain"><span class="syntax--meta syntax--paragraph syntax--text">## 5     1</span></span></span>
+<span><span class="syntax--text syntax--plain"><span class="syntax--meta syntax--paragraph syntax--text">## 6     1</span></span></span></pre>
+<pre class="editor-colors lang-r"><span><span class="syntax--text syntax--plain syntax--null-grammar"># now we thin the data to 300 locations in total for analysis<span class="trailing-whitespace"> </span></span></span>
+<span class=""><span class="syntax--text syntax--plain syntax--null-grammar">selection &lt;- seq(1, nrow(data), length.out = 300)</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar">dataThin &lt;- data[selection, ]</span></span></pre>
+<p>Here is how the data looks. Each colour is a different track and dots are sampling locations which are superimposed onto the unknown latent field. Note, that this is the same data from Fig 2.</p>
+<p><img src="README_files/figure-markdown_github/plotdata-1.png" alt=""></p>
+<p>Now we compile the file <a href="TMBfile.cpp">TMBfile.cpp</a> to use in TMB. This file contains the negative joint log-likelihood function -log([<em>X</em>, <em>Y</em>, <em>S</em>]). Note that you must have installed the <a href="https://cran.r-project.org/package=TMB">TMB</a> <code style="font-family: Menlo, Consolas, &quot;DejaVu Sans Mono&quot;, monospace;">R</code> package from CRAN.</p>
+<pre class="editor-colors lang-r"><span><span class="syntax--text syntax--plain syntax--null-grammar">compile("TMBfile.cpp")</span></span>
+<span class=""><span class="syntax--text syntax--plain syntax--null-grammar">dyn.load(dynlib("TMBfile"))</span></span></pre>
+<p>Next is some house keeping to prepare the data for TMB (refer to the comments inside the script below for details):</p>
+<pre class="editor-colors lang-r"><span><span class="syntax--text syntax--plain syntax--null-grammar"># replace data with thinned version</span></span>
+<span class=""><span class="syntax--text syntax--plain syntax--null-grammar">data=dataThin</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar"># obtain sampling times</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar">tsim &lt;- data[,1]</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar"># number of observations in total</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar">numObs &lt;- nrow(data)</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar"># Generate random measurements</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar"># create trackID which records when new tracks start in the dataframe</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar">trackLength &lt;- NULL</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar">trackId &lt;- 0</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar">for(i in 1:numTracks){</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar"><span class="leading-whitespace">  </span>trackLength &lt;- c(trackLength, length(which(data$Track==i)))</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar"><span class="leading-whitespace">  </span>trackId &lt;- c(trackId, sum(trackLength))</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar">}</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar"># create a set of locations which allows for gradients to be calculated in cpp file</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar">Yobs &lt;- data$Temp</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar">Y1New &lt;- data[,2]</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar">Y2New &lt;- data[,3]</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar">for(i in 1:length(data[,1])){</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar"><span class="leading-whitespace">  </span>Y1New &lt;- c(Y1New,data[i,2]+.5, data[i,2])</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar"><span class="leading-whitespace">  </span>Y2New &lt;- c(Y2New,data[i,3], data[i,3]+.5)</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar">}</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar"># combine prediction lattice with sampling locations and gradient locations</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar">predGrid &lt;-  rbind(cbind(Y1New, Y2New), lattice)</span></span></pre>
+<p>Next we create a mesh using <code style="font-family: Menlo, Consolas, &quot;DejaVu Sans Mono&quot;, monospace;">inla.mesh.create</code> to use the SPDE approach of <code style="font-family: Menlo, Consolas, &quot;DejaVu Sans Mono&quot;, monospace;">R-INLA</code>. We mush be careful to specify an index that matches sampling locations with mesh locations, but also change indexing for use in the <code style="font-family: Menlo, Consolas, &quot;DejaVu Sans Mono&quot;, monospace;">C++</code> code.</p>
+<pre class="editor-colors lang-r"><span><span class="syntax--text syntax--plain syntax--null-grammar"># create INLA mesh</span></span>
+<span class=""><span class="syntax--text syntax--plain syntax--null-grammar">mesh &lt;- inla.mesh.create(loc = predGrid, extend = T, refine = T)</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar"># now create an index that matches sampling locations with mesh locations</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar">ii0 &lt;- mesh$idx$loc</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar"># Create data for TMB</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar">dataTMB &lt;- list(tsim=tsim,Y1=Y1New, Y2=Y2New, Y=Yobs, trackId=trackId,  meshidxloc=mesh$idx$loc-1)</span></span></pre>
+<p>Now we will create our sparse precision matrix for smoothness (<em>?</em>) 2, which enables the field to be differentiable (in mean square sense). For details on this part see Appendix A.</p>
+<pre class="editor-colors lang-r"><span><span class="syntax--text syntax--plain syntax--null-grammar"># using SPDE method from R-INLA with alpha=2 (kappa=1)</span></span>
+<span class=""><span class="syntax--text syntax--plain syntax--null-grammar">dataTMB$spde &lt;- (inla.spde2.matern(mesh, alpha=2)$param.inla)[c("M0","M1","M2")]</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar"># create our own sparse precision matrix for alpha=3 (kappa=2)</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar">M0 &lt;- (inla.spde2.matern(mesh, alpha=2)$param.inla)["M0"]$M0</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar">M1 &lt;- (inla.spde2.matern(mesh, alpha=2)$param.inla)["M1"]$M1</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar">M2 &lt;- (inla.spde2.matern(mesh, alpha=2)$param.inla)["M2"]$M2</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar">M3 &lt;- M2%*%solve(M0)%*%M1</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar">M3 &lt;- as(M3, "dgTMatrix")</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar">dataTMB$spde[["M3"]]&lt;- M3</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar"># number of rows in SPDE object</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar">n_s = nrow(dataTMB$spde$M0)</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar"># vector of 1's used in TMB (this should be updated)</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar">dataTMB$Ind &lt;- rep(1, n_s)</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar"># create geodata object</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar">obj1 &lt;- cbind(cbind(dataTMB$Y1, dataTMB$Y2)[1:length(dataTMB$Y),], dataTMB$Y)</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar">geodata &lt;- as.geodata(obj1, coords.col = 1:2, data.col = 3)</span></span></pre>
+<h2>Parameter Estimation</h2>
+<p>Time to fit some models! First let us fit a standard model using <code style="font-family: Menlo, Consolas, &quot;DejaVu Sans Mono&quot;, monospace;">likfit</code> from the pacakge <code style="font-family: Menlo, Consolas, &quot;DejaVu Sans Mono&quot;, monospace;">geoR</code>. This approach ignores any preferential effect and works conditional on the observed sampling locations <strong>X</strong>.</p>
+<pre class="editor-colors lang-r"><span><span class="syntax--text syntax--plain syntax--null-grammar">standardMLE &lt;- likfit(geodata, coords = geodata$coords, data = geodata$data, kappa=kappa, ini=c(.5,.5))</span></span></pre>
+<pre class="editor-colors lang-text"><span><span class="syntax--text syntax--plain"><span class="syntax--meta syntax--paragraph syntax--text">## ---------------------------------------------------------------</span></span></span>
+<span class=""><span class="syntax--text syntax--plain"><span class="syntax--meta syntax--paragraph syntax--text">## likfit: likelihood maximisation using the function optim.</span></span></span>
+<span><span class="syntax--text syntax--plain"><span class="syntax--meta syntax--paragraph syntax--text">## likfit: Use control() to pass additional</span></span></span>
+<span><span class="syntax--text syntax--plain"><span class="syntax--meta syntax--paragraph syntax--text">##          arguments for the maximisation function.</span></span></span>
+<span><span class="syntax--text syntax--plain"><span class="syntax--meta syntax--paragraph syntax--text">##         For further details see documentation for optim.</span></span></span>
+<span><span class="syntax--text syntax--plain"><span class="syntax--meta syntax--paragraph syntax--text">## likfit: It is highly advisable to run this function several</span></span></span>
+<span><span class="syntax--text syntax--plain"><span class="syntax--meta syntax--paragraph syntax--text">##         times with different initial values for the parameters.</span></span></span>
+<span><span class="syntax--text syntax--plain"><span class="syntax--meta syntax--paragraph syntax--text">## likfit: <span class="syntax--storage syntax--type syntax--class syntax--warning">WARNING</span>: This step can be time demanding!</span></span></span>
+<span><span class="syntax--text syntax--plain"><span class="syntax--meta syntax--paragraph syntax--text">## ---------------------------------------------------------------</span></span></span>
+<span><span class="syntax--text syntax--plain"><span class="syntax--meta syntax--paragraph syntax--text">## likfit: end of numerical maximisation.</span></span></span></pre>
+<pre class="editor-colors lang-r"><span><span class="syntax--text syntax--plain syntax--null-grammar">(standardMLE)</span></span></pre>
+<pre class="editor-colors lang-text"><span><span class="syntax--text syntax--plain"><span class="syntax--meta syntax--paragraph syntax--text">## likfit: estimated model parameters:</span></span></span>
+<span class=""><span class="syntax--text syntax--plain"><span class="syntax--meta syntax--paragraph syntax--text">##      beta     tausq   sigmasq       phi<span class="trailing-whitespace"> </span></span></span></span>
+<span><span class="syntax--text syntax--plain"><span class="syntax--meta syntax--paragraph syntax--text">## " 4.3058" " 0.1093" " 0.7261" "18.5567"<span class="trailing-whitespace"> </span></span></span></span>
+<span><span class="syntax--text syntax--plain"><span class="syntax--meta syntax--paragraph syntax--text">## Practical Range with cor=0.05 for asymptotic range: 99.6194</span></span></span>
+<span><span class="syntax--text syntax--plain"><span class="syntax--meta syntax--paragraph syntax--text">##<span class="trailing-whitespace"> </span></span></span></span>
+<span><span class="syntax--text syntax--plain"><span class="syntax--meta syntax--paragraph syntax--text">## likfit: maximised log-likelihood = -170.3</span></span></span></pre>
+<p>Next we will fit the model in <code style="font-family: Menlo, Consolas, &quot;DejaVu Sans Mono&quot;, monospace;">TMB</code>. First we define the parameters for the model (including latent states). Our latent states are the field <strong>S</strong> and behavioural states <strong>beta</strong>. The call to <code style="font-family: Menlo, Consolas, &quot;DejaVu Sans Mono&quot;, monospace;">MakeADFun</code> creates the likelihood function, which is then optimized numerically using <code style="font-family: Menlo, Consolas, &quot;DejaVu Sans Mono&quot;, monospace;">nlminb</code> (but other general-purpose optimization functions, e.g. <code style="font-family: Menlo, Consolas, &quot;DejaVu Sans Mono&quot;, monospace;">optim</code>, can also be considered).</p>
+<pre class="editor-colors lang-r"><span><span class="syntax--text syntax--plain syntax--null-grammar">parameters &lt;- list(</span></span>
+<span class=""><span class="syntax--text syntax--plain syntax--null-grammar"><span class="leading-whitespace">  </span>S = rep(0, n_s),</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar"><span class="leading-whitespace">  </span>beta = rep(0, length(dataTMB$Y)),</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar"><span class="leading-whitespace">  </span>mu = standardMLE$beta,</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar"><span class="leading-whitespace">  </span>log_papertau = 3,</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar"><span class="leading-whitespace">  </span>log_kappa = log(1/standardMLE$phi),</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar"><span class="leading-whitespace">  </span>alpha = rnorm(1,alpha[2], 0.25),</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar"><span class="leading-whitespace">  </span>log_d = log(dataParam[2]),</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar"><span class="leading-whitespace">  </span>log_sdbehav = log(dataParam[1])</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar">)</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar"># create TMB object (note= random=c("S", "beta") to</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar"># integrate out random field and latent behvaiour states)</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar">obj &lt;- MakeADFun(dataTMB, parameters, random=c("S", "beta"), DLL="TMBfile", method = "nlminb", hessian=FALSE, silent=T)</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar"># conduct maximisation</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar">opt &lt;- try( nlminb(obj$par,obj$fn,obj$gr, control=list(rel.tol=1e-7)) )</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar"># rerun up to 4 times in case of any gradient errors</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar">for(m in 1:4){</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar"><span class="leading-whitespace">  </span>if(class(opt) != 'try-error' &amp;&amp; opt$convergence == 0) {</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar"><span class="leading-whitespace">    </span>print("Success!")</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar"><span class="leading-whitespace">  </span>}</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar"><span class="leading-whitespace">  </span>else{<span class="trailing-whitespace"> </span></span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar"><span class="leading-whitespace">    </span>paste0("Failed, try number ", m)</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar"><span class="leading-whitespace">    </span>lengthPar &lt;- length(obj$env$last.par.best)</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar"><span class="leading-whitespace">    </span>tmp &lt;- obj$env$last.par.best[(lengthPar-5):lengthPar] + 0.01</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar"><span class="leading-whitespace">    </span>opt &lt;- try(nlminb(tmp,obj$fn,obj$gr, control=list(rel.tol=1e-7)))</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar"><span class="leading-whitespace">  </span>}</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar">}</span></span></pre>
+<pre class="editor-colors lang-text"><span><span class="syntax--text syntax--plain"><span class="syntax--meta syntax--paragraph syntax--text">## [1] "Success!"</span></span></span>
+<span class=""><span class="syntax--text syntax--plain"><span class="syntax--meta syntax--paragraph syntax--text">## [1] "Success!"</span></span></span>
+<span><span class="syntax--text syntax--plain"><span class="syntax--meta syntax--paragraph syntax--text">## [1] "Success!"</span></span></span>
+<span><span class="syntax--text syntax--plain"><span class="syntax--meta syntax--paragraph syntax--text">## [1] "Success!"</span></span></span></pre>
+<pre class="editor-colors lang-r"><span><span class="syntax--text syntax--plain syntax--null-grammar"># Extract sigma^2 (partial sill)</span></span>
+<span class=""><span class="syntax--text syntax--plain syntax--null-grammar">report_spde &lt;- obj$report()</span></span></pre>
+<p>It is always good practice to verify that the optimization iterations have converged:</p>
+<pre class="editor-colors lang-r"><span><span class="syntax--text syntax--plain syntax--null-grammar"># check convergence</span></span>
+<span class=""><span class="syntax--text syntax--plain syntax--null-grammar">opt$convergence</span></span></pre>
+<pre class="editor-colors lang-text"><span><span class="syntax--text syntax--plain"><span class="syntax--meta syntax--paragraph syntax--text">## [1] 0</span></span></span></pre>
+<pre class="editor-colors lang-r"><span><span class="syntax--text syntax--plain syntax--null-grammar"># Obtain the standard errors</span></span>
+<span class=""><span class="syntax--text syntax--plain syntax--null-grammar">sdre &lt;- try( sdreport(obj) )</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar">if( class(sdre) != 'try-error') {</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar"><span class="leading-whitespace">  </span># input params</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar"><span class="leading-whitespace">  </span>summary(sdre, "fixed")</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar">}</span></span></pre>
+<pre class="editor-colors lang-text"><span><span class="syntax--text syntax--plain"><span class="syntax--meta syntax--paragraph syntax--text">##                Estimate  Std. Error</span></span></span>
+<span class=""><span class="syntax--text syntax--plain"><span class="syntax--meta syntax--paragraph syntax--text">## mu             4.406319  0.24327250</span></span></span>
+<span><span class="syntax--text syntax--plain"><span class="syntax--meta syntax--paragraph syntax--text">## log_papertau   4.215612  0.21093490</span></span></span>
+<span><span class="syntax--text syntax--plain"><span class="syntax--meta syntax--paragraph syntax--text">## log_kappa     -2.830299  0.15373855</span></span></span>
+<span><span class="syntax--text syntax--plain"><span class="syntax--meta syntax--paragraph syntax--text">## alpha        142.870640 25.55025060</span></span></span>
+<span><span class="syntax--text syntax--plain"><span class="syntax--meta syntax--paragraph syntax--text">## log_d          2.209733  0.03291732</span></span></span>
+<span><span class="syntax--text syntax--plain"><span class="syntax--meta syntax--paragraph syntax--text">## log_sdbehav   -2.733629  1.25336438</span></span></span></pre>
+<h2>Prediction</h2>
+<p>We have obtained parameter estimates for the standard method and for the preferential model using <code style="font-family: Menlo, Consolas, &quot;DejaVu Sans Mono&quot;, monospace;">TMB</code>. To predict using the non-preferential model we will use kriging with plug-in parameters obtained from the standard <code style="font-family: Menlo, Consolas, &quot;DejaVu Sans Mono&quot;, monospace;">likfit</code> function. For the preferential model we use the mode of the <strong>[S|Y,X]</strong> at the optimal parameters. This is provided by <code style="font-family: Menlo, Consolas, &quot;DejaVu Sans Mono&quot;, monospace;">TMB</code> as part of the Laplace approximation procedure and is defined in eq (2.7) of the paper.</p>
+<pre class="editor-colors lang-r"><span><span class="syntax--text syntax--plain syntax--null-grammar"># conduct simple kriging using standard MLE plug-in parameters</span></span>
+<span class=""><span class="syntax--text syntax--plain syntax--null-grammar">SKDat &lt;- krige.control(obj.model = standardMLE, type.krige = "SK")</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar"># now predict at the prediction "lattice" locations where signal=T is used</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar"># to specify that there was measurement error on our data observations</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar">nonPredPref &lt;- krige.conv(geodata, loc = lattice, krige = SKDat, output=list(signal=T))</span></span></pre>
+<pre class="editor-colors lang-text"><span><span class="syntax--text syntax--plain"><span class="syntax--meta syntax--paragraph syntax--text">## krige.conv: model with constant mean</span></span></span>
+<span class=""><span class="syntax--text syntax--plain"><span class="syntax--meta syntax--paragraph syntax--text">## krige.conv: Kriging performed using global neighbourhood</span></span></span></pre>
+<pre class="editor-colors lang-r"><span><span class="syntax--text syntax--plain syntax--null-grammar"># finally we obtain preferential model field prediction from mode of [S|Y,X]</span></span>
+<span class=""><span class="syntax--text syntax--plain syntax--null-grammar">modePred &lt;- obj$env$last.par.best[(length(Y1New)+1):(length(Y1New)+nrow(lattice))]</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar"># non-pref predictions</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar">nonPrefPred &lt;- nonPredPref$predict</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar"># non-pref prediction variance</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar">nonPrefVar &lt;- nonPredPref$krige.var</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar"># prediction variance from TMB</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar">predVar &lt;- (summary(sdre, "random")[(length(Y1New)+1):(length(Y1New)+nrow(lattice)),2])^2</span></span></pre>
+<p>Next we want to be able to compare these predictions to the real values of the field at the prediction points.</p>
+<pre class="editor-colors lang-r"><span><span class="syntax--text syntax--plain syntax--null-grammar"># obtain real data on prediction lattice</span></span>
+<span class=""><span class="syntax--text syntax--plain syntax--null-grammar"># match indicies of full grid used to simulate data and prediction lattice</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar">matchedIndic &lt;- row.match(lattice,gridFull)</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar">rawDatSmall &lt;- rawDat$variable1[matchedIndic] + mean</span></span></pre>
+<p>Now let us calculate the mean ignorance score for each method on this data set (MIGN from eq (4.2) in the paper). Recall that the ignorance function (IGN) is given by</p>
+<pre class="editor-colors lang-r"><span><span class="syntax--text syntax--plain syntax--null-grammar">IGN &lt;- function(pred, act, var) {</span></span>
+<span class=""><span class="syntax--text syntax--plain syntax--null-grammar"><span class="leading-whitespace">  </span>((pred - act)^2) / var + log(var)</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar">}</span></span></pre>
+<p>Then the MIGN can be computed as follows:</p>
+<pre class="editor-colors lang-r"><span><span class="syntax--text syntax--plain syntax--null-grammar">IgnScorePost &lt;- IGN(modePred, rawDatSmall, predVar)</span></span>
+<span class=""><span class="syntax--text syntax--plain syntax--null-grammar">IgnScoreNonPref &lt;- IGN(nonPredPref$predict, rawDatSmall, nonPredPref$krige.var)</span></span>
+<span><span class="syntax--text syntax--plain syntax--null-grammar">mean(IgnScorePost)</span></span></pre>
+<pre class="editor-colors lang-text"><span><span class="syntax--text syntax--plain"><span class="syntax--meta syntax--paragraph syntax--text">## [1] -0.5294663</span></span></span></pre>
+<pre class="editor-colors lang-r"><span><span class="syntax--text syntax--plain syntax--null-grammar">mean(IgnScoreNonPref)</span></span></pre>
+<pre class="editor-colors lang-text"><span><span class="syntax--text syntax--plain"><span class="syntax--meta syntax--paragraph syntax--text">## [1] -0.3737076</span></span></span></pre>
+<p>Finally we can plot the IGN scores and compare predictive surfaces from the non-preferential and preferential models. We consider only prediction locations in regions near the sampling locations: <img src="README_files/figure-markdown_github/showign-1.png" alt=""><img src="README_files/figure-markdown_github/showign-2.png" alt=""><img src="README_files/figure-markdown_github/showign-3.png" alt=""></p>
+<p>Note that the mean IGN for the following two plots are -0.96 (TMB) and -0.88 (kriging) respectively. Comparing this to Fig 5 (b), this simulation shows a relatively small improvement by the preferential model compared to most simulations with these parameters, mainly due to the large coverage of the field by the data locations. <img src="README_files/figure-markdown_github/plotign2-1.png" alt=""><img src="README_files/figure-markdown_github/plotign2-2.png" alt=""></p>
