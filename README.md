@@ -1,7 +1,7 @@
 Preferential Sampling with moving monitoring stations
 ================
 
-This repository is a companion resource to the paper "Modelling ocean temperatures from bio-probes under preferential sampling" (submitted), by Daniel Dinsdale and Matias Salibian-Barrera and it contains code to illustrate how to apply the methods discussed in that paper.
+This repository is a companion resource to the paper [Modelling ocean temperatures from bio-probes under preferential sampling](https://arxiv.org/abs/1901.02630), to appear in The Annals of Applied Statistics, by Daniel Dinsdale and Matias Salibian-Barrera. Here you can find code illustrating how to apply the methods discussed in that paper.
 
 Introduction
 ------------
